@@ -89,20 +89,19 @@ class BiGCN(torch.nn.Module):
               in_dim = in_channels  
             if i==1:  
               in_dim =hidden_channels 
-            if 1<i< self.layers-1:
-              in_dim= 128
+            if 1<i< self.layers:
+              in_dim= 256
             
             if i==0 :
               out_dim = hidden_channels  
             if 0 < i < self.layers-1:  
-              out_dim =128 
+              out_dim =256 
             if i== self.layers-1:
               out_dim= out_channels
             if print_log:
                 print("Layer {:d}, in_dim {:d}, out_dim {:d}".format(i, in_dim, out_dim))
             convs.append(BiGCNConv(in_dim, out_dim, cached=True, bi=True))
-            #if i < self.layers -1:
-             #  convs.append (BernoulliDropout(self.dropout))
+            
      
         self.convs = torch.nn.ModuleList(convs)
 
@@ -123,7 +122,7 @@ class BiGCN(torch.nn.Module):
         #end6 = time.time()
         #print(end6-begin6)
         
-
+        begin1=time.time()
         for i, conv in enumerate(self.convs):
             
             #begin4 = time.time()
@@ -133,9 +132,10 @@ class BiGCN(torch.nn.Module):
             #print(x)
             #x = F.dropout(x, p=self.dropout, training=self.training)
             x = conv(x, edge_index)
+            #x = F.dropout(x, p=self.dropout, training=self.training)
             if i != self.layers - 1:
-                 #x = F.relu(x)
-                 x = BernoulliDropout(0.9)(x)
+                 
+                x = BernoulliDropout(0.5)(x)
             
                  #print(x)
             
@@ -145,14 +145,126 @@ class BiGCN(torch.nn.Module):
 
             #print(x.shape)
             #print(edge_index.shape)
-            # begin = time.time()
-                     
-            #end = time.time()
-            #print(end-begin)
+          
                      
         x.cpu()              
-
+        end1=time.time()
+        #print(end1-begin1)
         return F.log_softmax(x, dim=1)
+
+
+
+class BiGCN_layerspar(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, layers, dropout, print_log=True):
+        super(BiGCN_layerspar, self).__init__()
+
+        if print_log:
+            print("Create a {:d}-layered Bi-GCN.".format(layers))
+
+        self.layers = layers
+        self.dropout = dropout
+        self.bn1 = torch.nn.BatchNorm1d(in_channels, affine=False)
+
+        convs = []
+        for i in range(self.layers):
+        
+            if i==0 :
+              in_dim = in_channels  
+            if i==1:  
+              in_dim =hidden_channels 
+            if 1<i< self.layers:
+              in_dim= 128
+            
+            if i==0 :
+              out_dim = hidden_channels  
+            if 0 < i < self.layers-1:  
+              out_dim =128 
+            if i== self.layers-1:
+              out_dim= out_channels
+            if print_log:
+                print("Layer {:d}, in_dim {:d}, out_dim {:d}".format(i, in_dim, out_dim))
+            convs.append(BiGCNConv(in_dim, out_dim, cached=True, bi=True))
+     
+        self.convs = torch.nn.ModuleList(convs)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+
+    def forward(self, data):       
+        x, edge_index = data.x, data.edge_index 
+        
+        x = self.bn1(x)
+        
+        begin1=time.time()               
+        for i, conv in enumerate(self.convs):           
+            #begin4 = time.time()
+            #x = x - x.mean(dim=0, keepdim=True)
+            #x = x / (x.std(dim=0, keepdim=True) + 0.0001)
+            x = BinActive()(x) 
+            #print(x)
+            #x = F.dropout(x, p=self.dropout, training=self.training)
+            x = conv(x, edge_index)
+            #x = F.dropout(x, p=self.dropout, training=self.training)
+     
+            if i != self.layers - 1:
+                 
+                x = BernoulliDropout(0.5)(x)
+            
+                 #print(x)
+           #end4 = time.time()
+           #print(end4-begin4)
+
+                               
+        x.cpu()              
+        return F.log_softmax(x, dim=1)
+        
+        
+        
+    def inference1(self, data,num_layer): 
+              
+        x, edge_index = data.x, data.edge_index  
+        x = self.bn1(x)
+     
+        for i, conv in enumerate(self.convs):
+            print(i)
+            if i == num_layer:
+                  break
+            #x = x - x.mean(dim=0, keepdim=True)
+            #x = x / (x.std(dim=0, keepdim=True) + 0.0001)
+            x = BinActive()(x)            
+            #x = F.dropout(x, p=self.dropout, training=self.training)
+            x = conv(x, edge_index)
+            #x = F.dropout(x, p=self.dropout, training=self.training)
+                        
+            #if i != self.layers-1:     
+             # x = BernoulliDropout(0.5)(x)
+            
+                 #print(x)                
+              
+
+        x.cpu()        
+        return x
+        
+    def inference2(self, data,num_layer,edge_index ): 
+        x = data
+        
+        for i, conv in enumerate(self.convs):
+            if i > num_layer-1:
+               x = BinActive()(x) 
+            #print(x)
+            #x = F.dropout(x, p=self.dropout, training=self.training)
+               x = conv(x, edge_index)
+            #x = F.dropout(x, p=self.dropout, training=self.training)   
+            if i!= self.layers-1:            
+                  x = BernoulliDropout(0.5)(x)
+        x.cpu()        
+        return F.log_softmax(x, dim=1)
+            
+       
+
 
 
 # indGCN and GraphSAGE
