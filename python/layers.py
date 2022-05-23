@@ -18,9 +18,9 @@ from torch_scatter import scatter_add
 from Function import BinLinear, BinActive
 
 
-class BiGCNConv(MessagePassing):
+class BiGCNConv2(MessagePassing):
     def __init__(self, in_channels, out_channels, cached=True, bi=False):
-        super(BiGCNConv, self).__init__(aggr="add")
+        super(BiGCNConv2, self).__init__(aggr="add")
         self.cached = cached
         self.bi = bi
         if bi:
@@ -51,7 +51,6 @@ class BiGCNConv(MessagePassing):
 
         edge_index, norm = self.cached_result
 
-        #print(edge_index)
         x = self.propagate(edge_index,size=(x.size(0), x.size(0)),
                               x=x, norm=norm)
         return x
@@ -62,9 +61,63 @@ class BiGCNConv(MessagePassing):
         return norm.view(-1, 1) * x_j
 
 
-class indBiGCNConv(MessagePassing):
+class BiGCNConv(MessagePassing):
+    def __init__(self, in_channels, out_channels, cached=True, bi=False):
+        super(BiGCNConv, self).__init__(aggr="add")
+        self.cached = cached
+        self.bi = bi
+        if bi:
+            self.lin = BinLinear(in_channels, out_channels)
+        else:
+            self.lin = torch.nn.Linear(in_channels, out_channels)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.lin.reset_parameters()
+        self.cached_result = None
+
+    def forward(self, x, adj):
+        x = self.lin(x)
+
+        x=torch.mm(adj,x)
+        return x
+              
+    def message(self, x_j, norm):
+
+        # Normalize node features
+        return norm.view(-1, 1) * x_j
+        
+ 
+class BiGCNConv1(MessagePassing):
+    def __init__(self, in_channels, out_channels, cached=True, bi=False):
+        super(BiGCNConv1, self).__init__(aggr="add")
+        self.cached = cached
+        self.bi = bi
+        if bi:
+            self.lin = BinLinear(in_channels, out_channels)
+        else:
+            self.lin = torch.nn.Linear(in_channels, out_channels)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.lin.reset_parameters()
+        self.cached_result = None
+
+    def forward(self, x, adj):
+        x = self.lin(x)
+
+        x=torch.bmm(adj,x,out=None)
+        return x
+               
+    
+
+
+   
+class indBiGCNConv1(MessagePassing):
     def __init__(self, in_channels, out_channels, binarize=False):
-        super(indBiGCNConv, self).__init__(aggr="mean")
+        super(indBiGCNConv1, self).__init__(aggr="mean")
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.binarize = binarize
@@ -77,7 +130,7 @@ class indBiGCNConv(MessagePassing):
     def reset_parameters(self):
         self.lin.reset_parameters()
 
-    def forward(self, x, edge_index):
+    def forward(self, x, adj):
         # shape of x: [N, in_channels]
         # shape of edge_index: [2, E]
        
@@ -87,16 +140,98 @@ class indBiGCNConv(MessagePassing):
         #print(len(x[0]))
         #print(len(x[1]))
         #print(len(edge_index))
-        out = self.propagate(edge_index, x=x, norm=None)
+        out = torch.bmm(adj,x,out=None)
 
-        out = out - out.mean(dim=1, keepdim=True)
-        out = out / (out.std(dim=1, keepdim=True) + 0.0001)
-        out = BinActive()(out)
+        #out = out - out.mean(dim=1, keepdim=True)
+        #out = out / (out.std(dim=1, keepdim=True) + 0.0001)
+        #out = BinActive()(out)
 
         out = self.lin(out)
         end=time.time()
         #print ("out shapre:", out.shape)
-        print ("pure compute latency:", end-begin)
+        #print ("pure compute latency:", end-begin)
+
+        return out
+
+
+
+
+
+class indBiGCNConv(MessagePassing):
+    def __init__(self, in_channels, out_channels, binarize=False):
+        super(indBiGCNConv, self).__init__(aggr="mean")
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.binarize = binarize
+        if binarize:
+            self.lin = BinLinear(in_channels, out_channels)
+        else:
+            self.lin = torch.nn.Linear(in_channels, out_channels)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.lin.reset_parameters()
+
+    def forward(self, x, edge_index):
+        # shape of x: [N, in_channels]
+        # shape of edge_index: [2, E]
+
+        begin=time.time()
+        #if torch.is_tensor(x):
+         #   x = (x, x)
+        #print(len(x[0]))
+        #print(len(x[1]))
+        #print(len(edge_index))
+        out = self.propagate(edge_index, x=x, norm=None)
+
+        #out = out - out.mean(dim=1, keepdim=True)
+        #out = out / (out.std(dim=1, keepdim=True) + 0.0001)
+        #out = BinActive()(out)
+
+        #out = self.lin(x)
+        end=time.time()
+        #print ("out shapre:", out.shape)
+        #print ("pure compute latency:", end-begin)
+
+        return out
+        
+        
+        
+class indBiGCNConv1(MessagePassing):
+    def __init__(self, in_channels, out_channels, binarize=False):
+        super(indBiGCNConv1, self).__init__(aggr="mean")
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.binarize = binarize
+        if binarize:
+            self.lin = BinLinear(in_channels, out_channels)
+        else:
+            self.lin = torch.nn.Linear(in_channels, out_channels)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.lin.reset_parameters()
+
+    def forward(self, x, edge_index):
+        # shape of x: [N, in_channels]
+        # shape of edge_index: [2, E]
+
+        begin=time.time()
+        #if torch.is_tensor(x):
+         #   x = (x, x)
+        #print(len(x[0]))
+        #print(len(x[1]))
+        #print(len(edge_index))
+        #out = self.propagate(edge_index, x=x, norm=None)
+
+        #out = out - out.mean(dim=1, keepdim=True)
+        #out = out / (out.std(dim=1, keepdim=True) + 0.0001)
+        #out = BinActive()(out)
+
+        out = self.lin(x)
+        end=time.time()
+        #print ("out shapre:", out.shape)
+        #print ("pure compute latency:", end-begin)
 
         return out
 
