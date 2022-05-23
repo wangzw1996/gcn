@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.utils import add_self_loops
 
-from layers import BiGCNConv, indBiGCNConv, BiSAGEConv, BiGraphConv
+from layers import BiGCNConv,BiGCNConv1,BiGCNConv2, indBiGCNConv,indBiGCNConv1, BiSAGEConv, BiGraphConv
 from Function import BinActive, BinActive0,BinLinear
 
 import torch.nn.functional as F
@@ -38,9 +38,9 @@ class BernoulliDropout(nn.Module):
         if self.p <= 0.0:
             return x
         mask_ = None
-        if len(x.shape) <= 2:
+        if len(x.shape) <= 3:
             if x.is_cuda:
-                mask_ = torch.cuda.FloatTensor(x.shape).bernoulli_(1.-self.p)
+                mask_ = torch.cuda.FloatTensor(x.shape,device=1).bernoulli_(1.-self.p)
             else:
                 mask_ = torch.FloatTensor(x.shape).bernoulli_(1.-self.p)
         else:
@@ -56,11 +56,12 @@ class BernoulliDropout(nn.Module):
             zero_point = self.mul_mask.zero_point
             mask_ = torch.quantize_per_tensor(
                 mask_, scale, zero_point, dtype=torch.quint8)
-        if len(x.shape) > 2:
+        #if len(x.shape) > 2:
             
-            mask_ = mask_.view(
-                mask_.shape[0], mask_.shape[1], 1, 1).expand(-1, -1, x.shape[2], x.shape[3])
-        x = self.mul_mask.mul(x, mask_)
+         #   mask_ = mask_.view(
+          #      mask_.shape[0], mask_.shape[1],1,1).expand(-1,-1, x.shape[1],x.shape[2])
+       
+        x = self.mul_mask.mul(x,mask_)
         x = self.mul_scalar.mul_scalar(x, self.multiplier.item())
         return x
 
@@ -72,17 +73,19 @@ class BernoulliDropout(nn.Module):
         
         
 class BiGCN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, layers, dropout, print_log=True):
+    def __init__(self, in_channels, hidden_channels,adj, out_channels,layers, dropout, print_log=True):
         super(BiGCN, self).__init__()
 
         if print_log:
             print("Create a {:d}-layered Bi-GCN.".format(layers))
 
         self.layers = layers
+        self.adj=adj
         self.dropout = dropout
         self.bn1 = torch.nn.BatchNorm1d(in_channels, affine=False)
 
         convs = []
+        convs1=[]
         for i in range(self.layers):
         
             if i==0 :
@@ -90,20 +93,22 @@ class BiGCN(torch.nn.Module):
             if i==1:  
               in_dim =hidden_channels 
             if 1<i< self.layers:
-              in_dim= 256
+              in_dim= 128
             
             if i==0 :
               out_dim = hidden_channels  
             if 0 < i < self.layers-1:  
-              out_dim =256 
+              out_dim =128 
             if i== self.layers-1:
               out_dim= out_channels
             if print_log:
                 print("Layer {:d}, in_dim {:d}, out_dim {:d}".format(i, in_dim, out_dim))
-            convs.append(BiGCNConv(in_dim, out_dim, cached=True, bi=True))
+            convs.append(BiGCNConv(in_dim, out_dim, cached=True, bi=False))
+            convs1.append(BiGCNConv1(in_dim, out_dim, cached=True, bi=False))
             
      
         self.convs = torch.nn.ModuleList(convs)
+        self.convs1 = torch.nn.ModuleList(convs1)
 
         self.reset_parameters()
 
@@ -113,7 +118,6 @@ class BiGCN(torch.nn.Module):
 
     def forward(self, data):
        
-       
         x, edge_index = data.x, data.edge_index 
         #print(edge_index.shape)  
         #print(edge_index)     
@@ -122,35 +126,58 @@ class BiGCN(torch.nn.Module):
         #end6 = time.time()
         #print(end6-begin6)
         
-        begin1=time.time()
+        begin4=time.time()
         for i, conv in enumerate(self.convs):
             
-            #begin4 = time.time()
+            
             #x = x - x.mean(dim=0, keepdim=True)
             #x = x / (x.std(dim=0, keepdim=True) + 0.0001)
-            x = BinActive()(x) 
+            #x = BinActive()(x1) 
             #print(x)
             #x = F.dropout(x, p=self.dropout, training=self.training)
-            x = conv(x, edge_index)
+            x = conv(x,self.adj)
             #x = F.dropout(x, p=self.dropout, training=self.training)
-            if i != self.layers - 1:
-                 
+            
+            if i != self.layers - 1:                 
                 x = BernoulliDropout(0.5)(x)
+                #print(x)
             
-                 #print(x)
-            
-            
-            #end4 = time.time()
-            #print(end4-begin4)
+                        
+        end4 = time.time()
+       # print(end4-begin4)
 
             #print(x.shape)
             #print(edge_index.shape)
-          
-                     
-        x.cpu()              
-        end1=time.time()
-        #print(end1-begin1)
+        x.cpu() 
         return F.log_softmax(x, dim=1)
+                                                                                                                                  
+    def inference(self, data):               
+         x=data.x
+         x = self.bn1(x)
+         x=torch.stack((x,x,x,x,x),dim=0)
+         adj1=torch.stack((self.adj,self.adj,self.adj,self.adj,self.adj),dim=0)
+        
+         for i, conv1 in enumerate(self.convs1):
+                       
+            #x = BinActive()(x) 
+             
+            x = conv1(x, adj1)
+            
+            
+                       
+            if i != self.layers-1:    
+              begin3=time.time()  
+              x = BernoulliDropout(0.5)(x)
+              end3=time.time()
+              print(end3-begin3)
+                    
+         begin1=time.time()                                                  
+         x.cpu()  
+         end1=time.time()               
+         
+         print(end1-begin1)
+         
+         return F.log_softmax(x, dim=1)
 
 
 
@@ -175,15 +202,15 @@ class BiGCN_layerspar(torch.nn.Module):
             if 1<i< self.layers:
               in_dim= 128
             
-            if i==0 :
+            if i ==0  :
               out_dim = hidden_channels  
-            if 0 < i < self.layers-1:  
-              out_dim =128 
-            if i== self.layers-1:
+            if  0< i <self.layers-1:  
+              out_dim = 128
+            if  i == self.layers-1:
               out_dim= out_channels
             if print_log:
                 print("Layer {:d}, in_dim {:d}, out_dim {:d}".format(i, in_dim, out_dim))
-            convs.append(BiGCNConv(in_dim, out_dim, cached=True, bi=True))
+            convs.append(BiGCNConv2(in_dim, out_dim, cached=True, bi=True))
      
         self.convs = torch.nn.ModuleList(convs)
 
@@ -228,6 +255,7 @@ class BiGCN_layerspar(torch.nn.Module):
         x, edge_index = data.x, data.edge_index  
         x = self.bn1(x)
      
+         
         for i, conv in enumerate(self.convs):
             print(i)
             if i == num_layer:
@@ -242,25 +270,34 @@ class BiGCN_layerspar(torch.nn.Module):
             #if i != self.layers-1:     
              # x = BernoulliDropout(0.5)(x)
             
-                 #print(x)                
-              
+                 #print(x)                              
 
         x.cpu()        
         return x
         
     def inference2(self, data,num_layer,edge_index ): 
         x = data
-        
+        begin6=time.time()
         for i, conv in enumerate(self.convs):
             if i > num_layer-1:
                x = BinActive()(x) 
             #print(x)
             #x = F.dropout(x, p=self.dropout, training=self.training)
                x = conv(x, edge_index)
-            #x = F.dropout(x, p=self.dropout, training=self.training)   
-            if i!= self.layers-1:            
+            #x = F.dropout(x, p=self.dropout, training=self.training) 
+               begin7=time.time()  
+               if i!= self.layers-1:            
                   x = BernoulliDropout(0.5)(x)
-        x.cpu()        
+            end7=time.time()
+            #print(end7-begin7)
+        
+        end6=time.time()
+       
+        #print(end6-begin6) 
+        x.cpu() 
+        
+        
+              
         return F.log_softmax(x, dim=1)
             
        
@@ -279,26 +316,30 @@ class NeighborSamplingGCN(torch.nn.Module):
         self.model = model
         self.binarize = binarize
         self.dropout = dropout
-
-        self.convs = torch.nn.ModuleList()
-        self.convs.append(GNNConv(in_channels, hidden_channels, binarize=binarize))
-        self.convs.append(GNNConv(hidden_channels, out_channels, binarize=binarize))
+        self.convs1 = torch.nn.ModuleList()
+        self.convs2 = torch.nn.ModuleList()
+        self.convs1.append(GNNConv(in_channels, hidden_channels,binarize=False))
+        self.convs2.append(indBiGCNConv1(in_channels, hidden_channels,binarize=False))
+       # self.convs.append(GNNConv(hidden_channels, 128,binarize=binarize))
+        #self.convs.append(GNNConv(128, 128,binarize=binarize))
+        self.convs1.append(GNNConv(hidden_channels, out_channels,binarize=False))
+        self.convs2.append(indBiGCNConv1(hidden_channels, out_channels,binarize=False))
         self.reset_parameters()
 
     def reset_parameters(self):
-        for conv in self.convs:
+        for conv in self.convs1:
             conv.reset_parameters()
 
     def forward(self, x, adjs):
 
         for i, (edge_index, _, size) in enumerate(adjs):
-            
+            #print(i)
             x_target = x[:size[1]]
             
             x = x - x.mean(dim=0, keepdim=True)
             x = x / (x.std(dim=0, keepdim=True) + 0.0001)
             x = BinActive0()(x)
-            
+            print(x.shape)
             
             x_target = x_target - x_target.mean(dim=0, keepdim=True)
             x_target = x_target / (x_target.std(dim=0, keepdim=True) + 0.0001)
@@ -306,10 +347,11 @@ class NeighborSamplingGCN(torch.nn.Module):
            
             # if self.model == 'GraphSAGE':
             #     edge_index, _ = add_self_loops(edge_index, num_nodes=x[0].size(0))
-            x = self.convs[i]((x, x_target), edge_index)
+            x = self.convs1[i]((x,x_target),edge_index)
+            x = self.convs2[i](x,edge_index)
             if i != self.num_layers - 1:
                 x = F.relu(x)
-                x = F.dropout(x, p=self.dropout, training=self.training)
+                #x = BernoulliDropout(0.5)(x)
         return x.log_softmax(dim=-1)
 
     def inference(self, x_all, subgraph_loader, device, return_lat=False):
@@ -317,57 +359,95 @@ class NeighborSamplingGCN(torch.nn.Module):
         load_time = 0.0
         bin_active_time = 0.0
         conv_time = 0.0
+        cc=0
         #torch.no_grad()
         #torch.set_num_interop_threads(72)
         #torch.set_num_threads(72)
         #print ("Number of Inter Thred:", torch.get_num_interop_threads())
         #print ("Number of Intra Thread:", torch.get_num_threads())
+        
         for i in range(self.num_layers):
             xs = []
             #print ("layer no.:", i)
-            layer_begin_time = time.time()
+            
+            
             for batch_size, n_id, adj in subgraph_loader:
-                load_begin_time = time.time()
+                #load_begin_time = time.time()
+                layer_begin_time = time.time()
+                print(n_id)
+                
+                begin1=time.time()
                 edge_index, _, size = adj.to(device)
                 x = x_all[n_id].to(device)
+                end1=time.time()
+                cc +=end1-begin1
                 x_target = x[:size[1]]
-                load_end_time = time.time()
-                load_time += load_end_time - load_begin_time
                 
-                bin_begin_time = time.time()
-                x = x - x.mean(dim=0, keepdim=True)
-                x = x / (x.std(dim=0, keepdim=True) + 0.0001)
-                x = BinActive()(x)
+    
+                layer_end_time = time.time()
+                #print(layer_end_time-layer_begin_time)
+                
+                #x=x_target
+                #x=torch.stack((x_target,x_target,x_target,x_target,x_target
+                #,x_target,x_target,x_target,x_target,x_target,x_target,x_target
+                #,x_target,x_target,x_target,x_target,x_target,x_target,x_target,x_target),dim=0)
+                #load_end_time = time.time()
+                #load_time += load_end_time - load_begin_time
+                
+                #bin_begin_time = time.time()
+                #x = x - x.mean(dim=0, keepdim=True)
+                #x = x / (x.std(dim=0, keepdim=True) + 0.0001)
+                #x = BinActive()(x)
 
                 # bn x_target
-                x_target = x_target - x_target.mean(dim=0, keepdim=True)
-                x_target = x_target / (x_target.std(dim=0, keepdim=True) + 0.0001)
-                x_target = BinActive()(x_target)
-                bin_end_time = time.time()
-                bin_active_time += bin_end_time - bin_begin_time
+                #x_target = x_target - x_target.mean(dim=0, keepdim=True)
+                #x_target = x_target / (x_target.std(dim=0, keepdim=True) + 0.0001)
+                #x_target = BinActive()(x_target)
+                #bin_end_time = time.time()
+                #bin_active_time += bin_end_time - bin_begin_time
                 
                 #print("input shape:", x.shape)
                 #print("edge_index shape:", edge_index.shape)
                 #print("target_shape:", x_target.shape)
-                conv_begin_time = time.time()                 
-                x = self.convs[i]((x,x_target), edge_index)
-                
+
+
+                conv_begin_time = time.time()
+                x = self.convs1[i]((x,x_target), edge_index)              
+                x1=torch.stack((x,x,x),dim=0)
+                x = self.convs2[i](x1, edge_index)
+                print(x.shape)
+               
+                 
                 if i != self.num_layers - 1:
-                    x = F.relu(x)
-                xs.append(x.cpu())
+                    
+                    x = F.relu(x)   
+                    begin2=time.time()                 
+                    x = BernoulliDropout(0.5)(x)
+                    end2=time.time()
+                    print(end2-begin2)
+                    
                 
+                #x=x.log_softmax(dim=-1) 
+                
+                xs.append(x.cpu())
+                               
                 conv_end_time = time.time()
                 conv_time += conv_end_time - conv_begin_time
-                 
+                
+                
+            
             x_all = torch.cat(xs, dim=0)
-            layer_end_time = time.time()
-            #print ("No. %d consumes %f s"%(i, layer_end_time - layer_begin_time))
-        end_time = time.time()
-        total_time = end_time - begin_time
-        if return_lat:
-            return x_all, total_time, load_time, bin_active_time, conv_time 
-        else:
-            return x_all
+             #print ("No. %d consumes %f s"%(i, layer_end_time - layer_begin_time))
+        #end_time = time.time()
+        #total_time = end_time - begin_time
+        #if return_lat:
+         #   return x_all, total_time, load_time, bin_active_time, conv_time 
+        #else:
+        
+        print(conv_time)
+        print(cc) 
+                  
+        return  x_all
 
 
 class SAINT(torch.nn.Module):
